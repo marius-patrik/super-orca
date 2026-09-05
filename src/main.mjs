@@ -20,6 +20,7 @@
 import { orca, runtimeDescriptor, cdpTargets } from './orca-runtime.mjs'
 import { readAccount, readQuota, chipLabel } from './antigravity.mjs'
 import { renderChip, cdpAvailable } from './status-chip.mjs'
+import { ensure as ensureCdpFlag, status as cdpFlagStatus } from './cdp-enforce.mjs'
 
 const EVENT_LOG_KEY = 'event-log'
 const EVENT_LOG_MAX = 50
@@ -157,6 +158,14 @@ export default async function activate(ctx) {
     return { rendered: result.ok, label, account, quota }
   })
 
+  // Keeps the CDP port alive across restarts by writing the launch flag into
+  // every Orca shortcut. Deliberate, persistent, and reversible via disable().
+  ctx.commands.register('cdp-enforce', async () => {
+    const result = await ensureCdpFlag(9222)
+    ctx.log(`cdp enforce: ${result.alreadyEnforced ? 'already set' : 'updated ' + result.changed.length} of ${result.shortcuts} shortcut(s)`)
+    return { ...result, live: await cdpAvailable() }
+  })
+
   // --- events -------------------------------------------------------------
   // Subscribing is a host call; delivery then arrives through ctx.events.on.
   const wanted = ['worktree.created', 'worktree.removed', 'agent.status.changed']
@@ -174,6 +183,15 @@ export default async function activate(ctx) {
       await appendEvent(host, { event: name, at: Date.now(), payload })
       ctx.log(`event ${name}`)
     })
+  }
+
+  // Reconcile the launch flag on every activation so a reinstall or a shortcut
+  // rewrite cannot silently drop it. Never restarts Orca; takes effect next launch.
+  try {
+    const enforced = await ensureCdpFlag(9222)
+    ctx.log(`cdp flag: ${enforced.alreadyEnforced ? 'already enforced' : 'applied to ' + enforced.changed.length} (${enforced.shortcuts} shortcuts)`)
+  } catch (err) {
+    ctx.log(`cdp flag reconcile failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   ctx.log('super-orca ready')

@@ -12,7 +12,7 @@ throughout, so treat everything below as a moving target.
 | --- | --- |
 | Capabilities | all 7 |
 | Panels | 1 (`Super Orca` control panel) |
-| Commands | 5 worker-handled + 3 bound to built-in actions |
+| Commands | 6 worker-handled + 3 bound to built-in actions |
 | Keybindings | 5 |
 | Events | all 3 |
 | Host API methods | all 13 |
@@ -195,6 +195,31 @@ verified with the correct `project` field and Antigravity's own token, so it is
 an entitlement gate, not a malformed request. The reader surfaces that state
 instead of inventing a number; drop in a working source and the chip renders
 `AG <n>% left` unchanged.
+
+### Keeping the CDP port open
+
+A plugin cannot add a flag to the process that launched it, but it can make the
+flag survive. `src/cdp-enforce.mjs` appends `--remote-debugging-port=9222` to
+every shortcut that launches Orca (Start Menu, Desktop, taskbar), reconciled on
+every activation so a reinstall cannot silently drop it. `disable()` reverts all
+of them.
+
+This is a deliberate, persistent weakening: an open CDP port lets any local
+process drive Orca's renderer with full privileges. It is the price of a
+status-bar chip, because Orca exposes no contribution point for one.
+
+### Why Orca's own Gemini/Antigravity meters read 100%
+
+Orca resolves the quota project by calling `loadCodeAssist` with
+`metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' }` and reading
+`cloudaicompanionProject` from the response. **Consumer accounts get no such
+field**, so the lookup throws, the fetch never happens, and the meter renders a
+full bar instead of an error. A meter reading "100% left" there means "no data",
+not "no usage".
+
+Orca also hardcodes `weekly: null` and reduces all buckets with
+`max(usedPercent)`, so a provider with more than one pool can only ever show one
+number. `chipLabel()` renders every active bucket instead.
 
 ## Limits worth knowing
 

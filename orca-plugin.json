@@ -72,6 +72,11 @@
         "context": "global"
       },
       {
+        "id": "cdp-enforce",
+        "title": "Super Orca: Enforce CDP Launch Flag",
+        "context": "global"
+      },
+      {
         "id": "open-tasks",
         "title": "Super Orca: Open Tasks",
         "context": "global",

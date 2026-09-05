@@ -137,14 +137,22 @@ export async function readQuota() {
   return { available: true, buckets }
 }
 
-/** Chip label: percentage remaining when entitled, an honest short state otherwise. */
+/**
+ * Chip label. Renders EVERY active pool, not just one.
+ *
+ * Orca's own meter cannot do this: it hardcodes `weekly: null` and collapses
+ * all buckets with `max(usedPercent)`, so a provider with more than one pool
+ * (Antigravity has two) always shows a single number. Keeping each bucket
+ * separate is the whole point of rendering our own chip.
+ */
 export function chipLabel(quota) {
   if (!quota.available) {
     return quota.reason === 'SUBSCRIPTION_REQUIRED'
       ? 'AG n/a'
       : `AG ${String(quota.reason).slice(0, 14)}`
   }
-  const primary = quota.buckets.find((b) => !b.disabled && b.remainingFraction != null)
-  if (!primary) return 'AG —'
-  return `AG ${Math.round(primary.remainingFraction * 100)}% left`
+  const active = quota.buckets.filter((b) => !b.disabled && b.remainingFraction != null)
+  if (active.length === 0) return 'AG —'
+  const parts = active.map((b) => `${Math.round(b.remainingFraction * 100)}%`)
+  return `AG ${parts.join(' · ')} left`
 }
