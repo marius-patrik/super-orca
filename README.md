@@ -12,8 +12,8 @@ throughout, so treat everything below as a moving target.
 | --- | --- |
 | Capabilities | all 7 |
 | Panels | 1 (`Super Orca` control panel) |
-| Commands | 4 worker-handled + 3 bound to built-in actions |
-| Keybindings | 4 |
+| Commands | 5 worker-handled + 3 bound to built-in actions |
+| Keybindings | 5 |
 | Events | all 3 |
 | Host API methods | all 13 |
 
@@ -158,6 +158,43 @@ Design tokens injected as CSS custom properties: `--background`, `--foreground`,
 `--primary-foreground`, `--secondary`, `--secondary-foreground`, `--muted`,
 `--muted-foreground`, `--accent`, `--accent-foreground`, `--destructive`,
 `--destructive-foreground`, `--border`, `--input`, `--ring`, `--radius`.
+
+## Status-bar chip (CDP)
+
+Orca has **no status-bar contribution point**, so `src/status-chip.mjs` injects
+one over the Chrome DevTools Protocol. It needs Orca started with
+`--remote-debugging-port=9222`; without it, `antigravity-chip` (`Mod+Alt+G`)
+is a no-op that says so.
+
+The chip is located structurally, not by class name - Orca's Tailwind classes
+churn between releases - and re-renders idempotently by element id.
+
+### Antigravity quota status
+
+`src/antigravity.mjs` reads Antigravity's credentials from the OS keyring
+(Windows generic credential `gemini:antigravity`, **not**
+`~/.gemini/oauth_creds.json`, which belongs to the Gemini CLI - a different
+OAuth client) and calls
+`daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`.
+
+Request and response field names come from the protobuf descriptors embedded
+in `agy.exe`:
+
+```
+RetrieveUserQuotaSummaryRequest { project }
+QuotaSummaryBucket { bucketId, displayName, description, window,
+                     remainingFraction, remainingAmount, disabled, resetTime }
+QuotaSummaryGroup  { displayName, description, buckets }
+```
+
+**On a Google AI Pro consumer subscription this returns 403
+`SUBSCRIPTION_REQUIRED`** and the chip renders `AG n/a`. The endpoint is gated
+on a Gemini Code Assist licence, which a consumer plan does not carry
+(`onboarding.json` shows `enterpriseOnboardingComplete: false`). This was
+verified with the correct `project` field and Antigravity's own token, so it is
+an entitlement gate, not a malformed request. The reader surfaces that state
+instead of inventing a number; drop in a working source and the chip renders
+`AG <n>% left` unchanged.
 
 ## Limits worth knowing
 

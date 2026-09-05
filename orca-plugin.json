@@ -5,43 +5,128 @@
   "name": "Super Orca",
   "version": "0.1.0",
   "description": "A local development plugin that exercises every capability, contribution point and host API method Orca's plugin API v0 exposes.",
-  "author": { "name": "marius-patrik" },
+  "author": {
+    "name": "marius-patrik"
+  },
   "repository": "https://github.com/marius-patrik/super-orca",
-  "engines": { "orca": ">=1.4.0" },
+  "engines": {
+    "orca": ">=1.4.0"
+  },
   "pluginApi": 1,
   "main": "src/main.mjs",
   "capabilities": [
-    { "kind": "workspace:read" },
-    { "kind": "terminal:send" },
-    { "kind": "notifications:show" },
-    { "kind": "storage" },
-    { "kind": "secrets" },
-    { "kind": "events:subscribe" },
-    { "kind": "settings:own" }
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "notifications:show"
+    },
+    {
+      "kind": "storage"
+    },
+    {
+      "kind": "secrets"
+    },
+    {
+      "kind": "events:subscribe"
+    },
+    {
+      "kind": "settings:own"
+    }
   ],
   "contributes": {
     "panels": [
-      { "id": "control", "title": "Super Orca", "entry": "panels/control.html" }
+      {
+        "id": "control",
+        "title": "Super Orca",
+        "entry": "panels/control.html"
+      }
     ],
     "commands": [
-      { "id": "context-dump", "title": "Super Orca: Dump Workspace Context", "context": "worktree" },
-      { "id": "event-log", "title": "Super Orca: Show Event Log", "context": "global" },
-      { "id": "ping", "title": "Super Orca: Self Test", "context": "global" },
-      { "id": "runtime-probe", "title": "Super Orca: Probe Orca Runtime (escape hatch)", "context": "global" },
-      { "id": "open-tasks", "title": "Super Orca: Open Tasks", "context": "global", "action": "view.tasks" },
-      { "id": "toggle-explorer", "title": "Super Orca: Toggle Explorer", "context": "global", "action": "sidebar.explorer.toggle" },
-      { "id": "maximize-floating", "title": "Super Orca: Maximize Floating Workspace", "context": "global", "action": "floatingWorkspace.maximize" }
+      {
+        "id": "context-dump",
+        "title": "Super Orca: Dump Workspace Context",
+        "context": "worktree"
+      },
+      {
+        "id": "event-log",
+        "title": "Super Orca: Show Event Log",
+        "context": "global"
+      },
+      {
+        "id": "ping",
+        "title": "Super Orca: Self Test",
+        "context": "global"
+      },
+      {
+        "id": "runtime-probe",
+        "title": "Super Orca: Probe Orca Runtime (escape hatch)",
+        "context": "global"
+      },
+      {
+        "id": "antigravity-chip",
+        "title": "Super Orca: Refresh Antigravity Status Chip",
+        "context": "global"
+      },
+      {
+        "id": "open-tasks",
+        "title": "Super Orca: Open Tasks",
+        "context": "global",
+        "action": "view.tasks"
+      },
+      {
+        "id": "toggle-explorer",
+        "title": "Super Orca: Toggle Explorer",
+        "context": "global",
+        "action": "sidebar.explorer.toggle"
+      },
+      {
+        "id": "maximize-floating",
+        "title": "Super Orca: Maximize Floating Workspace",
+        "context": "global",
+        "action": "floatingWorkspace.maximize"
+      }
     ],
     "events": [
-      { "on": "worktree.created" },
-      { "on": "worktree.removed" },
-      { "on": "agent.status.changed" }
+      {
+        "on": "worktree.created"
+      },
+      {
+        "on": "worktree.removed"
+      },
+      {
+        "on": "agent.status.changed"
+      }
     ],
     "keybindings": [
-      { "command": "ping", "key": "Mod+Alt+P", "when": "global" },
-      { "command": "event-log", "key": "Mod+Alt+L", "when": "global" },
-      { "command": "runtime-probe", "key": "Mod+Alt+R", "when": "global" },
-      { "command": "maximize-floating", "key": "Mod+Alt+M", "when": "global" }
+      {
+        "command": "ping",
+        "key": "Mod+Alt+P",
+        "when": "global"
+      },
+      {
+        "command": "event-log",
+        "key": "Mod+Alt+L",
+        "when": "global"
+      },
+      {
+        "command": "runtime-probe",
+        "key": "Mod+Alt+R",
+        "when": "global"
+      },
+      {
+        "command": "maximize-floating",
+        "key": "Mod+Alt+M",
+        "when": "global"
+      },
+      {
+        "command": "antigravity-chip",
+        "key": "Mod+Alt+G",
+        "when": "global"
+      }
     ]
   }
 }

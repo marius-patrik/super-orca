@@ -18,6 +18,8 @@
  */
 
 import { orca, runtimeDescriptor, cdpTargets } from './orca-runtime.mjs'
+import { readAccount, readQuota, chipLabel } from './antigravity.mjs'
+import { renderChip, cdpAvailable } from './status-chip.mjs'
 
 const EVENT_LOG_KEY = 'event-log'
 const EVENT_LOG_MAX = 50
@@ -132,6 +134,27 @@ export default async function activate(ctx) {
     }
     ctx.log(`runtime probe: ${JSON.stringify(report)}`)
     return report
+  })
+
+  // Status-bar chip. No contribution point exists for this, so it goes in
+  // through CDP and is a no-op unless Orca was launched with
+  // --remote-debugging-port. See src/status-chip.mjs for the security note.
+  ctx.commands.register('antigravity-chip', async () => {
+    if (!(await cdpAvailable())) {
+      ctx.log('chip skipped: no CDP port (launch Orca with --remote-debugging-port=9222)')
+      return { rendered: false, reason: 'cdp-unavailable' }
+    }
+    const [account, quota] = await Promise.all([
+      readAccount().catch((e) => ({ error: e.message })),
+      readQuota().catch((e) => ({ available: false, reason: e.message }))
+    ])
+    const label = chipLabel(quota)
+    const tooltip = quota.available
+      ? `Antigravity quota (${account.authMethod ?? 'unknown'})`
+      : `Antigravity quota unavailable: ${quota.reason}${quota.message ? ' - ' + quota.message : ''}`
+    const result = await renderChip({ label, tooltip })
+    ctx.log(`chip: ${label} (${result.ok ? 'rendered' : result.reason})`)
+    return { rendered: result.ok, label, account, quota }
   })
 
   // --- events -------------------------------------------------------------
