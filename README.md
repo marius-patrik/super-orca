@@ -187,14 +187,36 @@ QuotaSummaryBucket { bucketId, displayName, description, window,
 QuotaSummaryGroup  { displayName, description, buckets }
 ```
 
-**On a Google AI Pro consumer subscription this returns 403
-`SUBSCRIPTION_REQUIRED`** and the chip renders `AG n/a`. The endpoint is gated
-on a Gemini Code Assist licence, which a consumer plan does not carry
-(`onboarding.json` shows `enterpriseOnboardingComplete: false`). This was
-verified with the correct `project` field and Antigravity's own token, so it is
-an entitlement gate, not a malformed request. The reader surfaces that state
-instead of inventing a number; drop in a working source and the chip renders
-`AG <n>% left` unchanged.
+**On a Google AI Pro consumer subscription every quota endpoint returns 403
+`SUBSCRIPTION_REQUIRED`** - `retrieveUserQuota` and `retrieveUserQuotaSummary`,
+on both `cloudcode-pa` and `daily-cloudcode-pa`, with either the Gemini CLI or
+the Antigravity token. The CLI's own log shows `doRefreshQuota` succeeding while
+issuing only `loadCodeAssist` and `fetchAvailableModels`, and neither returns
+quota to us on any accepted metadata (`ideType: ANTIGRAVITY` is a valid enum but
+changes nothing; `pluginType: ANTIGRAVITY` is rejected outright). The client
+identity that unlocks it is numeric on the wire.
+
+So `src/antigravity-tui.mjs` reads the numbers from the CLI's own `/usage` view
+instead: it drives `agy` inside an Orca terminal through the CLI escape hatch,
+sends `/usage`, and parses the **rendered** screen (`terminal read --screen` -
+the default stream mode returns repaint fragments and is useless for a TUI).
+This costs nothing in model terms; `/usage` is a local view, not a turn.
+
+Antigravity has four pools - two model groups, each with a weekly and a
+five-hour window:
+
+```
+AG G 32%/7% · C 66%/0%
+   │  │   │    │  │  └ Claude/GPT five-hour
+   │  │   │    │  └─── Claude/GPT weekly
+   │  │   │    └────── Claude Opus, Claude Sonnet, GPT-OSS
+   │  │   └─────────── Gemini five-hour
+   │  └─────────────── Gemini weekly
+   └────────────────── Gemini Flash, Gemini Pro
+```
+
+The exact fraction comes from the bar's own percentage rather than the rounded
+line beneath it, because a 0.00% bucket prints no "N% remaining" line at all.
 
 ### Keeping the CDP port open
 

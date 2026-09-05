@@ -19,6 +19,7 @@
 
 import { orca, runtimeDescriptor, cdpTargets } from './orca-runtime.mjs'
 import { readAccount, readQuota, chipLabel } from './antigravity.mjs'
+import { readQuotaViaTui, tuiChipLabel } from './antigravity-tui.mjs'
 import { renderChip, cdpAvailable } from './status-chip.mjs'
 import { ensure as ensureCdpFlag, status as cdpFlagStatus } from './cdp-enforce.mjs'
 
@@ -145,14 +146,27 @@ export default async function activate(ctx) {
       ctx.log('chip skipped: no CDP port (launch Orca with --remote-debugging-port=9222)')
       return { rendered: false, reason: 'cdp-unavailable' }
     }
-    const [account, quota] = await Promise.all([
-      readAccount().catch((e) => ({ error: e.message })),
-      readQuota().catch((e) => ({ available: false, reason: e.message }))
-    ])
-    const label = chipLabel(quota)
-    const tooltip = quota.available
-      ? `Antigravity quota (${account.authMethod ?? 'unknown'})`
-      : `Antigravity quota unavailable: ${quota.reason}${quota.message ? ' - ' + quota.message : ''}`
+    const account = await readAccount().catch((e) => ({ error: e.message }))
+
+    // The TUI is the only source that works on a consumer plan; the REST API
+    // 403s. Try the API first anyway - it is far cheaper - and fall back.
+    let quota = await readQuota().catch((e) => ({ available: false, reason: e.message }))
+    let label = chipLabel(quota)
+    let tooltip = `Antigravity quota (${account.authMethod ?? 'unknown'})`
+
+    if (!quota.available) {
+      const viaTui = await readQuotaViaTui()
+      if (viaTui.available) {
+        quota = viaTui
+        label = tuiChipLabel(viaTui)
+        tooltip = viaTui.groups
+          .map((g) => `${g.group}: ` + g.buckets
+            .map((b) => `${b.window} ${b.remainingPercent}% (resets ${b.resetsIn})`).join(', '))
+          .join(' | ')
+      } else {
+        tooltip = `Antigravity quota unavailable: ${quota.reason} / tui: ${viaTui.reason}`
+      }
+    }
     const result = await renderChip({ label, tooltip })
     ctx.log(`chip: ${label} (${result.ok ? 'rendered' : result.reason})`)
     return { rendered: result.ok, label, account, quota }
