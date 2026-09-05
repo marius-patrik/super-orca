@@ -1,0 +1,164 @@
+<!--
+  Super Orca control panel.
+
+  Orca wraps this file in a host-generated shell before handing it to a
+  sandboxed iframe, so the document already has <!doctype>, <html>, and a
+  <head> carrying:
+    - a CSP: default-src 'none'; connect-src 'none'; script-src 'unsafe-inline';
+             style-src 'unsafe-inline'; img-src data:; font-src data:
+    - the design-token custom properties used below
+    - a ping responder (we must NOT implement orca-panel-pong ourselves)
+    - neutralised window.open, link navigation and form submits
+
+  Consequences: inline <style>/<script> only, no network of any kind, and
+  images only as data: URIs. This file supplies the body.
+
+  Only host API methods flagged panel-callable are reachable from here:
+  workspace.readContext, terminal.sendText, notifications.show. Storage,
+  secrets, settings and event subscription are worker-only by design.
+-->
+<body>
+<style>
+  body {
+    margin: 0;
+    padding: 12px;
+    font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+    background: var(--background, #0b0b0c);
+    color: var(--foreground, #e6e6e6);
+  }
+  h1 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+  p.sub { margin: 0 0 12px; color: var(--muted-foreground, #9a9a9a); font-size: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  button {
+    font: inherit;
+    padding: 5px 10px;
+    color: var(--primary-foreground, #0b0b0c);
+    background: var(--primary, #e6e6e6);
+    border: 1px solid var(--border, #2a2a2c);
+    border-radius: var(--radius, 6px);
+    cursor: pointer;
+  }
+  button.secondary { background: var(--secondary, #1a1a1c); color: var(--secondary-foreground, #e6e6e6); }
+  button:disabled { opacity: .5; cursor: default; }
+  label { display: block; font-size: 12px; color: var(--muted-foreground, #9a9a9a); margin-bottom: 3px; }
+  input {
+    font: inherit; width: 100%; box-sizing: border-box; padding: 5px 8px; margin-bottom: 8px;
+    color: var(--foreground, #e6e6e6); background: var(--input, #131315);
+    border: 1px solid var(--border, #2a2a2c); border-radius: var(--radius, 6px);
+  }
+  pre {
+    margin: 0; padding: 10px; max-height: 320px; overflow: auto;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word;
+    background: var(--card, #131315); color: var(--card-foreground, #e6e6e6);
+    border: 1px solid var(--border, #2a2a2c); border-radius: var(--radius, 6px);
+  }
+</style>
+
+<h1>Super Orca</h1>
+<p class="sub">Panel-callable host API surface.</p>
+
+<div class="row">
+  <button id="ctx">Read workspace context</button>
+  <button id="notify" class="secondary">Send notification</button>
+  <button id="clear" class="secondary">Clear</button>
+</div>
+
+<label for="terminalId">Terminal id (from workspace context)</label>
+<input id="terminalId" placeholder="e.g. 87e16160-23d3-467a-965e-439e51848bf0" autocomplete="off">
+<label for="text">Text to send</label>
+<input id="text" value="echo hello from super-orca" autocomplete="off">
+<div class="row">
+  <button id="send" class="secondary">Send to terminal</button>
+</div>
+
+<pre id="out">Ready.</pre>
+
+<script>
+  'use strict'
+
+  var out = document.getElementById('out')
+  var pending = new Map()
+  var seq = 0
+
+  function write(label, value) {
+    var body = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+    out.textContent = '[' + new Date().toLocaleTimeString() + '] ' + label + '\n' + body + '\n\n' + out.textContent
+  }
+
+  // Host -> panel results arrive as { type: 'orca-panel-action-result', requestId, ... }.
+  // The success/error field names are not part of the documented surface, so
+  // unwrap defensively rather than assuming one shape.
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return
+    var data = event.data
+    if (!data || data.type !== 'orca-panel-action-result') return
+    var entry = pending.get(data.requestId)
+    if (!entry) return
+    pending.delete(data.requestId)
+    var failed = data.ok === false || data.error !== undefined
+    if (failed) {
+      entry.reject(new Error(data.error || data.code || 'panel action failed'))
+    } else {
+      entry.resolve('value' in data ? data.value : 'result' in data ? data.result : data)
+    }
+  })
+
+  function callHost(action, params) {
+    return new Promise(function (resolve, reject) {
+      var requestId = 'r' + ++seq + '-' + Date.now()
+      pending.set(requestId, { resolve: resolve, reject: reject })
+      // Budget: 64KB per message, 30 messages per 10s, enforced host-side.
+      window.parent.postMessage(
+        { type: 'orca-panel-action', requestId: requestId, action: action, params: params },
+        '*'
+      )
+      setTimeout(function () {
+        if (pending.has(requestId)) {
+          pending.delete(requestId)
+          reject(new Error('timed out waiting for ' + action))
+        }
+      }, 10000)
+    })
+  }
+
+  function wire(id, label, build) {
+    document.getElementById(id).addEventListener('click', function () {
+      var req
+      try {
+        req = build()
+      } catch (err) {
+        write(label + ' skipped', err.message)
+        return
+      }
+      callHost(req.action, req.params).then(
+        function (value) { write(label, value) },
+        function (err) { write(label + ' failed', err.message) }
+      )
+    })
+  }
+
+  wire('ctx', 'workspace.readContext', function () {
+    return { action: 'workspace.readContext', params: {} }
+  })
+
+  wire('notify', 'notifications.show', function () {
+    return {
+      action: 'notifications.show',
+      params: { title: 'Super Orca', body: 'Notification from the plugin panel.' }
+    }
+  })
+
+  wire('send', 'terminal.sendText', function () {
+    var terminalId = document.getElementById('terminalId').value.trim()
+    if (!terminalId) throw new Error('Enter a terminal id first — read workspace context to list them.')
+    return {
+      action: 'terminal.sendText',
+      params: { terminalId: terminalId, text: document.getElementById('text').value, enter: false }
+    }
+  })
+
+  document.getElementById('clear').addEventListener('click', function () {
+    out.textContent = 'Ready.'
+  })
+</script>
