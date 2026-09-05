@@ -27,6 +27,7 @@
       { "id": "context-dump", "title": "Super Orca: Dump Workspace Context", "context": "worktree" },
       { "id": "event-log", "title": "Super Orca: Show Event Log", "context": "global" },
       { "id": "ping", "title": "Super Orca: Self Test", "context": "global" },
+      { "id": "runtime-probe", "title": "Super Orca: Probe Orca Runtime (escape hatch)", "context": "global" },
       { "id": "open-tasks", "title": "Super Orca: Open Tasks", "context": "global", "action": "view.tasks" },
       { "id": "toggle-explorer", "title": "Super Orca: Toggle Explorer", "context": "global", "action": "sidebar.explorer.toggle" },
       { "id": "maximize-floating", "title": "Super Orca: Maximize Floating Workspace", "context": "global", "action": "floatingWorkspace.maximize" }
@@ -39,6 +40,7 @@
     "keybindings": [
       { "command": "ping", "key": "Mod+Alt+P", "when": "global" },
       { "command": "event-log", "key": "Mod+Alt+L", "when": "global" },
+      { "command": "runtime-probe", "key": "Mod+Alt+R", "when": "global" },
       { "command": "maximize-floating", "key": "Mod+Alt+M", "when": "global" }
     ]
   }

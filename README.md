@@ -12,8 +12,8 @@ throughout, so treat everything below as a moving target.
 | --- | --- |
 | Capabilities | all 7 |
 | Panels | 1 (`Super Orca` control panel) |
-| Commands | 3 worker-handled + 3 bound to built-in actions |
-| Keybindings | 3 |
+| Commands | 4 worker-handled + 3 bound to built-in actions |
+| Keybindings | 4 |
 | Events | all 3 |
 | Host API methods | all 13 |
 
@@ -161,10 +161,40 @@ Design tokens injected as CSS custom properties: `--background`, `--foreground`,
 
 ## Limits worth knowing
 
-- Plugins are **declarative plus a sandboxed worker**. There is no API for
-  arbitrary renderer JS, no DOM access to Orca's own UI, no network capability,
-  and no process execution. Scoped `net:fetch` and `process:exec` kinds are
-  named as future phases in the capability model but are not implemented.
+The plugin **API** is declarative plus a sandboxed-looking worker. There is no
+API for arbitrary renderer JS, no DOM access to Orca's own UI, no network
+capability and no process execution. Scoped `net:fetch` and `process:exec` kinds
+are named as future phases in the capability model but are not implemented.
+
+**The worker is not actually sandboxed, though.** Orca spawns it with:
+
+```js
+fork(entry, [], { env, execArgv: [], serialization: 'advanced', stdio: [...] })
+```
+
+`execArgv: []` means no Node permission flags. The `capabilities` array gates
+`host.call` and the panel bridge only - it is an access-control list for the
+host API, not an OS sandbox. A worker declaring zero capabilities still has full
+`fs`, `net` and `child_process` access. `src/orca-runtime.mjs` uses that
+deliberately, and `Mod+Alt+R` (`runtime-probe`) demonstrates it.
+
+Three tiers of reach, in increasing order of intrusiveness:
+
+1. **Runtime RPC** - no setup. The worker shells out to the `orca` CLI, or reads
+   `orca-runtime.json` from userData for a pid, an authToken and transports
+   (a named pipe plus `ws://0.0.0.0:6768` - bound to every interface, not just
+   loopback). That covers terminals, worktrees, browser automation, computer-use,
+   automations, artifacts, projects and orchestration.
+2. **Renderer CDP** - requires launching Orca with `--remote-debugging-port`.
+   Orca never appends that switch and does not block it. With a target attached,
+   `Runtime.evaluate` runs arbitrary JS inside Orca's UI, which is the only route
+   to changes with no contribution point - adding a status-bar item, for example.
+   An open CDP port lets any local process drive the app: opt in deliberately.
+3. **Patching `app.asar`** - deepest and persistent, but breaks on every update
+   and invalidates bundle integrity. Not recommended.
+
+Other things to know:
+
 - Consent is fingerprinted over capabilities and worker trust, so changing
   either re-prompts.
 - Orca ships a plugin **kill list**; a blocked plugin reports

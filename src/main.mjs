@@ -17,6 +17,8 @@
  * built-in instead, and registering an undeclared command fails activation.
  */
 
+import { orca, runtimeDescriptor, cdpTargets } from './orca-runtime.mjs'
+
 const EVENT_LOG_KEY = 'event-log'
 const EVENT_LOG_MAX = 50
 
@@ -103,6 +105,32 @@ export default async function activate(ctx) {
     }
 
     ctx.log(`self test: ${JSON.stringify(report.checks)}`)
+    return report
+  })
+
+  // Escape hatch. Declares no capability and needs none: the worker is a plain
+  // unrestricted Node process, so it reaches Orca's whole runtime through the
+  // CLI regardless of what the manifest asks for. See src/orca-runtime.mjs.
+  ctx.commands.register('runtime-probe', async () => {
+    const descriptor = await runtimeDescriptor()
+    const [worktrees, terminals, cdp] = await Promise.all([
+      orca(['worktree', 'list']).catch((e) => ({ error: e.message })),
+      orca(['terminal', 'list']).catch((e) => ({ error: e.message })),
+      cdpTargets()
+    ])
+    const report = {
+      runtime: {
+        pid: descriptor.pid,
+        transports: descriptor.transports.map((t) => t.kind),
+        authTokenReadable: Boolean(descriptor.authToken)
+      },
+      worktrees: worktrees.worktrees?.length ?? worktrees,
+      terminals: terminals.terminals?.length ?? terminals,
+      // Non-null only when Orca was launched with --remote-debugging-port.
+      // With a target attached, Runtime.evaluate can modify Orca's UI directly.
+      rendererDebugTargets: cdp ? cdp.length : null
+    }
+    ctx.log(`runtime probe: ${JSON.stringify(report)}`)
     return report
   })
 
