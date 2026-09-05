@@ -18,10 +18,12 @@
  */
 
 import { orca, runtimeDescriptor, cdpTargets } from './orca-runtime.mjs'
-import { readAccount, readQuota, chipLabel } from './antigravity.mjs'
+import { readAccount } from './antigravity.mjs'
 import { readQuota as readUsageQuota, chipLabel as usageChipLabel, chipTooltip } from './antigravity-usage.mjs'
 import { renderChip, cdpAvailable } from './status-chip.mjs'
-import { ensure as ensureCdpFlag, status as cdpFlagStatus } from './cdp-enforce.mjs'
+import { ensure as ensureCdpFlag } from './cdp-enforce.mjs'
+
+let chipTimer = null
 
 const EVENT_LOG_KEY = 'event-log'
 const EVENT_LOG_MAX = 50
@@ -141,24 +143,27 @@ export default async function activate(ctx) {
   // Status-bar chip. No contribution point exists for this, so it goes in
   // through CDP and is a no-op unless Orca was launched with
   // --remote-debugging-port. See src/status-chip.mjs for the security note.
-  ctx.commands.register('antigravity-chip', async () => {
+  // Shared by the command and the periodic refresh below.
+  async function refreshChip() {
     if (!(await cdpAvailable())) {
-      ctx.log('chip skipped: no CDP port (launch Orca with --remote-debugging-port=9222)')
       return { rendered: false, reason: 'cdp-unavailable' }
     }
     const account = await readAccount().catch((e) => ({ error: e.message }))
-
-    // `agy -p /usage` is headless, takes ~4s, spawns no terminal and costs no
-    // model turn. The REST API 403s on a consumer plan, so this is the source.
+    // `agy -p /usage` is headless, ~4s, spawns no terminal and costs no model
+    // turn. The REST quota API 403s on a consumer plan, so this is the source.
     const quota = await readUsageQuota()
     const label = usageChipLabel(quota)
     const tooltip = quota.available
       ? chipTooltip(quota)
       : `${chipTooltip(quota)} (auth: ${account.authMethod ?? 'unknown'})`
+    const result = await renderChip({ label, tooltip, tone: quota.available ? 'normal' : 'muted' })
+    return { rendered: result.ok, label, quota }
+  }
 
-    const result = await renderChip({ label, tooltip })
-    ctx.log(`chip: ${label} (${result.ok ? 'rendered' : result.reason})`)
-    return { rendered: result.ok, label, account, quota }
+  ctx.commands.register('antigravity-chip', async () => {
+    const res = await refreshChip()
+    ctx.log(`chip: ${res.label ?? res.reason}`)
+    return res
   })
 
   // Keeps the CDP port alive across restarts by writing the launch flag into
@@ -197,9 +202,27 @@ export default async function activate(ctx) {
     ctx.log(`cdp flag reconcile failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
+  // Render immediately, then keep the chip fresh. Quota moves slowly and each
+  // refresh spawns a short-lived agy process, so 5 minutes is ample.
+  const CHIP_REFRESH_MS = 5 * 60 * 1000
+  const paintChip = async () => {
+    try {
+      const res = await refreshChip()
+      if (res.rendered) ctx.log(`chip: ${res.label}`)
+    } catch (err) {
+      ctx.log(`chip refresh failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  void paintChip()
+  chipTimer = setInterval(paintChip, CHIP_REFRESH_MS)
+  chipTimer.unref?.()
+
   ctx.log('super-orca ready')
 }
 
 export function deactivate() {
-  // Nothing to unwind: subscriptions and the worker die with the process.
+  // Subscriptions die with the process; the interval is cleared so a reload
+  // during development cannot leave a second timer painting the chip.
+  if (chipTimer) clearInterval(chipTimer)
+  chipTimer = null
 }

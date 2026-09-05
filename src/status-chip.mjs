@@ -15,13 +15,43 @@
 
 const CHIP_ID = 'super-orca-chip'
 
+/**
+ * Target discovery.
+ *
+ * Chrome's DevTools HTTP endpoint can wedge - the port stays LISTENING while
+ * /json/list never answers, e.g. while another target is hung. Observed in
+ * practice, so every request is bounded and the last good target is cached and
+ * retried directly before giving up.
+ */
+let cachedTarget = null
+
+async function fetchJson(url, timeoutMs) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+async function discoverTarget(port, { timeoutMs = 4000, attempts = 3 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const list = await fetchJson(`http://127.0.0.1:${port}/json/list`, timeoutMs)
+      const page = list.find((t) => t.type === 'page')
+      if (page) {
+        cachedTarget = page.webSocketDebuggerUrl
+        return cachedTarget
+      }
+    } catch {
+      // fall through to the next attempt, then the cache
+    }
+  }
+  if (cachedTarget) return cachedTarget
+  throw new Error('no reachable renderer target (DevTools endpoint unresponsive)')
+}
+
 /** Minimal CDP client for one page target. */
 async function attach(port) {
-  const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-  const page = list.find((t) => t.type === 'page')
-  if (!page) throw new Error('no renderer page target')
-
-  const ws = new WebSocket(page.webSocketDebuggerUrl)
+  const wsUrl = await discoverTarget(port)
+  const ws = new WebSocket(wsUrl)
   const pending = new Map()
   let id = 0
 
@@ -33,8 +63,13 @@ async function attach(port) {
     m.error ? entry.reject(new Error(m.error.message)) : entry.resolve(m.result)
   }
   await new Promise((resolve, reject) => {
-    ws.onopen = resolve
-    ws.onerror = () => reject(new Error('CDP socket failed'))
+    const timer = setTimeout(() => {
+      try { ws.close() } catch {}
+      cachedTarget = null
+      reject(new Error('CDP socket did not open within 5s'))
+    }, 5000)
+    ws.onopen = () => { clearTimeout(timer); resolve() }
+    ws.onerror = () => { clearTimeout(timer); cachedTarget = null; reject(new Error('CDP socket failed')) }
   })
 
   const send = (method, params = {}) =>
@@ -73,11 +108,27 @@ export async function renderChip({ port = 9222, label, tooltip = '', tone = 'mut
   try {
     return await cdp.evaluate(`(() => {
       const ID = ${JSON.stringify(CHIP_ID)}
-      const bar = [...document.querySelectorAll('div,footer,section')]
-        .filter(e => /hosts/.test(e.textContent || '')
-                  && e.children.length
-                  && e.getBoundingClientRect().height < 60)
-        .sort((a, b) => a.textContent.length - b.textContent.length)[0]
+
+      // Reuse the bar we already injected into, if it is still mounted.
+      const existing = document.getElementById(ID)
+      let bar = existing && existing.parentElement ? existing.parentElement : null
+
+      if (!bar) {
+        // Anchor on the host counter, which pluralises ("1 host" / "2 hosts"),
+        // or on the memory readout, and take the shortest short-height row
+        // nearest the bottom of the viewport. Class names are Tailwind
+        // utilities and churn between releases, so never match on those.
+        const vh = window.innerHeight
+        bar = [...document.querySelectorAll('div,footer,section')]
+          .filter(e => {
+            const text = e.textContent || ''
+            if (!/\d+\s+hosts?/.test(text) && !/[\d.]+\s*[KMG]B/.test(text)) return false
+            if (!e.children.length) return false
+            const r = e.getBoundingClientRect()
+            return r.height > 0 && r.height < 60 && r.bottom > vh - 120
+          })
+          .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null
+      }
       if (!bar) return { ok: false, reason: 'status bar not found' }
 
       let chip = document.getElementById(ID)
@@ -114,9 +165,8 @@ export async function removeChip({ port = 9222 } = {}) {
 /** True when a renderer target is reachable on `port`. */
 export async function cdpAvailable(port = 9222) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/list`)
-    if (!res.ok) return false
-    return (await res.json()).some((t) => t.type === 'page')
+    await discoverTarget(port, { timeoutMs: 3000, attempts: 2 })
+    return true
   } catch {
     return false
   }
