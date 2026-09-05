@@ -19,7 +19,7 @@
 
 import { orca, runtimeDescriptor, cdpTargets } from './orca-runtime.mjs'
 import { readAccount, readQuota, chipLabel } from './antigravity.mjs'
-import { readQuotaViaTui, tuiChipLabel } from './antigravity-tui.mjs'
+import { readQuota as readUsageQuota, chipLabel as usageChipLabel, chipTooltip } from './antigravity-usage.mjs'
 import { renderChip, cdpAvailable } from './status-chip.mjs'
 import { ensure as ensureCdpFlag, status as cdpFlagStatus } from './cdp-enforce.mjs'
 
@@ -148,25 +148,14 @@ export default async function activate(ctx) {
     }
     const account = await readAccount().catch((e) => ({ error: e.message }))
 
-    // The TUI is the only source that works on a consumer plan; the REST API
-    // 403s. Try the API first anyway - it is far cheaper - and fall back.
-    let quota = await readQuota().catch((e) => ({ available: false, reason: e.message }))
-    let label = chipLabel(quota)
-    let tooltip = `Antigravity quota (${account.authMethod ?? 'unknown'})`
+    // `agy -p /usage` is headless, takes ~4s, spawns no terminal and costs no
+    // model turn. The REST API 403s on a consumer plan, so this is the source.
+    const quota = await readUsageQuota()
+    const label = usageChipLabel(quota)
+    const tooltip = quota.available
+      ? chipTooltip(quota)
+      : `${chipTooltip(quota)} (auth: ${account.authMethod ?? 'unknown'})`
 
-    if (!quota.available) {
-      const viaTui = await readQuotaViaTui()
-      if (viaTui.available) {
-        quota = viaTui
-        label = tuiChipLabel(viaTui)
-        tooltip = viaTui.groups
-          .map((g) => `${g.group}: ` + g.buckets
-            .map((b) => `${b.window} ${b.remainingPercent}% (resets ${b.resetsIn})`).join(', '))
-          .join(' | ')
-      } else {
-        tooltip = `Antigravity quota unavailable: ${quota.reason} / tui: ${viaTui.reason}`
-      }
-    }
     const result = await renderChip({ label, tooltip })
     ctx.log(`chip: ${label} (${result.ok ? 'rendered' : result.reason})`)
     return { rendered: result.ok, label, account, quota }

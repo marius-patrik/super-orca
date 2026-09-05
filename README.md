@@ -190,23 +190,33 @@ QuotaSummaryGroup  { displayName, description, buckets }
 **On a Google AI Pro consumer subscription every quota endpoint returns 403
 `SUBSCRIPTION_REQUIRED`** - `retrieveUserQuota` and `retrieveUserQuotaSummary`,
 on both `cloudcode-pa` and `daily-cloudcode-pa`, with either the Gemini CLI or
-the Antigravity token. The CLI's own log shows `doRefreshQuota` succeeding while
+the Antigravity token. The CLI's log shows `doRefreshQuota` succeeding while
 issuing only `loadCodeAssist` and `fetchAvailableModels`, and neither returns
 quota to us on any accepted metadata (`ideType: ANTIGRAVITY` is a valid enum but
-changes nothing; `pluginType: ANTIGRAVITY` is rejected outright). The client
-identity that unlocks it is numeric on the wire.
+changes nothing; `pluginType: ANTIGRAVITY` is rejected). The client identity that
+unlocks it is numeric on the wire.
 
-So `src/antigravity-tui.mjs` reads the numbers from the CLI's own `/usage` view
-instead: it drives `agy` inside an Orca terminal through the CLI escape hatch,
-sends `/usage`, and parses the **rendered** screen (`terminal read --screen` -
-the default stream mode returns repaint fragments and is useless for a TUI).
-This costs nothing in model terms; `/usage` is a local view, not a turn.
-
-Antigravity has four pools - two model groups, each with a weekly and a
-five-hour window:
+`src/antigravity-usage.mjs` sidesteps all of that:
 
 ```
-AG G 32%/7% · C 66%/0%
+agy -p "/usage" --dangerously-skip-permissions
+```
+
+prints a TSV and exits in about 4 seconds - **no terminal, no PTY, no visible
+window, and no model turn**, because `/usage` is handled client-side:
+
+```
+Gemini Models          	 Weekly Limit Remaining    	 30% 	 2026-09-10T19:42:09Z
+Gemini Models          	 Five Hour Limit Remaining 	  0% 	 2026-09-05T18:24:25Z
+Claude and GPT models  	 Weekly Limit Remaining    	 66% 	 2026-09-12T12:36:14Z
+Claude and GPT models  	 Five Hour Limit Remaining 	  0% 	 2026-09-05T17:36:14Z
+```
+
+Antigravity has four pools - two model groups, each with a weekly and a
+five-hour window - rendered as:
+
+```
+AG G 30%/0% · C 66%/0%
    │  │   │    │  │  └ Claude/GPT five-hour
    │  │   │    │  └─── Claude/GPT weekly
    │  │   │    └────── Claude Opus, Claude Sonnet, GPT-OSS
@@ -215,8 +225,10 @@ AG G 32%/7% · C 66%/0%
    └────────────────── Gemini Flash, Gemini Pro
 ```
 
-The exact fraction comes from the bar's own percentage rather than the rounded
-line beneath it, because a 0.00% bucket prints no "N% remaining" line at all.
+> **Testing from Git Bash:** `/usage` is rewritten to `C:/Program Files/Git/usage`
+> unless `MSYS_NO_PATHCONV=1` is set. It then stops being a slash command and
+> **does** cost a model turn. Node's `execFile` does no such rewriting, so the
+> plugin path is unaffected.
 
 ### Keeping the CDP port open
 
