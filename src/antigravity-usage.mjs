@@ -26,13 +26,29 @@
  */
 
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const AGY = process.platform === 'win32'
-  ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'),
-         'Microsoft', 'WinGet', 'Links', 'agy.exe')
-  : 'agy'
+/**
+ * The agy binary, resolved by absolute path first.
+ *
+ * A bare `agy` is not safe to rely on: the plugin worker inherits Orca's
+ * environment, and Orca is a GUI app. On macOS a Dock/Finder launch gets the
+ * bare launchd PATH (/usr/bin:/bin:/usr/sbin:/sbin), which contains no Homebrew
+ * and no ~/.local/bin, so exec would fail with ENOENT even though agy is
+ * installed. Absolute candidates first, PATH only as a last resort.
+ */
+const AGY_CANDIDATES = process.platform === 'win32'
+  ? [join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'),
+          'Microsoft', 'WinGet', 'Links', 'agy.exe')]
+  : [join(homedir(), '.local', 'bin', 'agy'),
+     '/opt/homebrew/bin/agy',
+     '/usr/local/bin/agy']
+
+export function agyPath() {
+  return AGY_CANDIDATES.find((p) => existsSync(p)) ?? (process.platform === 'win32' ? 'agy.exe' : 'agy')
+}
 
 const TIMEOUT_MS = 30000
 
@@ -72,19 +88,33 @@ export function parseUsageTsv(stdout) {
  */
 export function readQuota({ timeoutMs = TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
-    execFile(AGY, ['-p', '/usage', '--dangerously-skip-permissions'],
+    execFile(agyPath(), ['-p', '/usage', '--dangerously-skip-permissions'],
       { encoding: 'utf-8', timeout: timeoutMs, windowsHide: true },
-      (err, stdout) => {
+      (err, stdout, stderr) => {
         // A timeout still yields usable stdout: the table prints before exit.
         const groups = parseUsageTsv(stdout || '')
         if (groups.length > 0) return resolve({ available: true, groups, source: 'agy /usage' })
-        resolve({
-          available: false,
-          reason: err ? (err.code === 'ENOENT' ? 'agy not installed' : err.message) : 'no usage rows',
-          groups: []
-        })
+        resolve({ available: false, reason: failureReason(err, stdout, stderr), groups: [] })
       })
   })
+}
+
+/**
+ * A short, honest reason for an empty read.
+ *
+ * agy reports a signed-out CLI on stdout as a plain `Error: Eligibility check
+ * failed: UNAUTHENTICATED` and still exits 0, so the exit code alone says
+ * nothing - the text has to be read.
+ */
+function failureReason(err, stdout, stderr) {
+  const text = `${stdout ?? ''}
+${stderr ?? ''}`
+  if (/UNAUTHENTICATED|Eligibility check failed|invalid authentication/i.test(text)) {
+    return 'agy signed out'
+  }
+  if (err?.code === 'ENOENT') return 'agy not installed'
+  if (err?.killed) return 'agy timed out'
+  return err ? String(err.message).slice(0, 60) : 'no usage rows'
 }
 
 /** Shortest useful group name: "Gemini Models" -> "G". */

@@ -6,6 +6,10 @@
  * `--remote-debugging-port=<port>`; Orca never appends that switch itself and
  * does not block it.
  *
+ * The port is never assumed - it is read off the running Orca process (see
+ * src/cdp-port.mjs), because the flag is fixed at launch and drifts whenever
+ * the default port is left bound by a crashed instance.
+ *
  * SECURITY: an open CDP port lets any local process drive the renderer with
  * full privileges - read tokens out of the app, click things, exfiltrate. This
  * module is opt-in and does nothing when the port is closed.
@@ -13,7 +17,17 @@
  * Node 22+ ships a global WebSocket, so there are no dependencies.
  */
 
+import { resolvePort } from './cdp-port.mjs'
+
 const CHIP_ID = 'super-orca-chip'
+
+/** Resolves an explicit port, or discovers the live one. Throws when there is none. */
+async function livePort(port) {
+  if (port != null) return port
+  const found = await resolvePort()
+  if (found == null) throw new Error('Orca is not running with --remote-debugging-port')
+  return found
+}
 
 /**
  * Target discovery.
@@ -23,7 +37,7 @@ const CHIP_ID = 'super-orca-chip'
  * practice, so every request is bounded and the last good target is cached and
  * retried directly before giving up.
  */
-let cachedTarget = null
+const cachedTargets = new Map()
 
 async function fetchJson(url, timeoutMs) {
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
@@ -37,15 +51,16 @@ async function discoverTarget(port, { timeoutMs = 4000, attempts = 3 } = {}) {
       const list = await fetchJson(`http://127.0.0.1:${port}/json/list`, timeoutMs)
       const page = list.find((t) => t.type === 'page')
       if (page) {
-        cachedTarget = page.webSocketDebuggerUrl
-        return cachedTarget
+        cachedTargets.set(port, page.webSocketDebuggerUrl)
+        return page.webSocketDebuggerUrl
       }
     } catch {
       // fall through to the next attempt, then the cache
     }
   }
-  if (cachedTarget) return cachedTarget
-  throw new Error('no reachable renderer target (DevTools endpoint unresponsive)')
+  const cached = cachedTargets.get(port)
+  if (cached) return cached
+  throw new Error(`no reachable renderer target on port ${port} (DevTools endpoint unresponsive)`)
 }
 
 /** Minimal CDP client for one page target. */
@@ -65,11 +80,11 @@ async function attach(port) {
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       try { ws.close() } catch {}
-      cachedTarget = null
+      cachedTargets.delete(port)
       reject(new Error('CDP socket did not open within 5s'))
     }, 5000)
     ws.onopen = () => { clearTimeout(timer); resolve() }
-    ws.onerror = () => { clearTimeout(timer); cachedTarget = null; reject(new Error('CDP socket failed')) }
+    ws.onerror = () => { clearTimeout(timer); cachedTargets.delete(port); reject(new Error('CDP socket failed')) }
   })
 
   const send = (method, params = {}) =>
@@ -98,13 +113,22 @@ async function attach(port) {
 /**
  * Renders (or updates) a chip in Orca's status bar.
  *
- * The status bar is found structurally rather than by class name: the shortest
- * short-height element whose text contains the hosts chip. Orca's classes are
- * Tailwind utilities and will churn between releases; this heuristic survives
- * that, and the chip re-renders idempotently by id.
+ * The status bar is found by geometry, not by class name and not by text:
+ * Orca's classes are Tailwind utilities that churn between releases, and the
+ * bar's text is whatever providers happen to be configured. Geometry is the
+ * stable part - it is the innermost full-width row of normal height sitting
+ * flush against the bottom of the viewport.
+ *
+ * Matching on text was the previous approach and it silently stopped working:
+ * the patterns live inside a template literal, where `\d` and `\s` lose their
+ * backslash before the renderer ever sees them, so `/\d+\s+hosts?/` arrived as
+ * `/d+s+hosts?/` and matched nothing. Any regex used here must be written with
+ * doubled backslashes; avoiding them entirely is safer.
+ *
+ * The chip re-renders idempotently by id.
  */
-export async function renderChip({ port = 9222, label, tooltip = '', tone = 'muted' } = {}) {
-  const cdp = await attach(port)
+export async function renderChip({ port, label, tooltip = '', tone = 'muted' } = {}) {
+  const cdp = await attach(await livePort(port))
   try {
     return await cdp.evaluate(`(() => {
       const ID = ${JSON.stringify(CHIP_ID)}
@@ -114,20 +138,21 @@ export async function renderChip({ port = 9222, label, tooltip = '', tone = 'mut
       let bar = existing && existing.parentElement ? existing.parentElement : null
 
       if (!bar) {
-        // Anchor on the host counter, which pluralises ("1 host" / "2 hosts"),
-        // or on the memory readout, and take the shortest short-height row
-        // nearest the bottom of the viewport. Class names are Tailwind
-        // utilities and churn between releases, so never match on those.
+        // The status bar: a full-width row, one line tall, flush with the
+        // bottom edge. Full-height ancestors fail the height test and the
+        // inner chip groups fail the width test, which leaves the bar itself.
         const vh = window.innerHeight
-        bar = [...document.querySelectorAll('div,footer,section')]
-          .filter(e => {
-            const text = e.textContent || ''
-            if (!/\d+\s+hosts?/.test(text) && !/[\d.]+\s*[KMG]B/.test(text)) return false
-            if (!e.children.length) return false
-            const r = e.getBoundingClientRect()
-            return r.height > 0 && r.height < 60 && r.bottom > vh - 120
-          })
-          .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null
+        const vw = window.innerWidth
+        const depth = (e) => { let d = 0; for (let n = e; n; n = n.parentElement) d++; return d }
+        const rows = [...document.querySelectorAll('div,footer,section')].filter(e => {
+          if (!e.children.length) return false
+          const r = e.getBoundingClientRect()
+          return r.height >= 16 && r.height <= 60 &&
+                 Math.abs(r.bottom - vh) <= 4 &&
+                 r.width >= vw * 0.8
+        })
+        // Innermost wins: outer wrappers of the same geometry are just padding.
+        bar = rows.sort((a, b) => depth(b) - depth(a))[0] || null
       }
       if (!bar) return { ok: false, reason: 'status bar not found' }
 
@@ -150,8 +175,8 @@ export async function renderChip({ port = 9222, label, tooltip = '', tone = 'mut
 }
 
 /** Removes the chip. Safe to call when it was never rendered. */
-export async function removeChip({ port = 9222 } = {}) {
-  const cdp = await attach(port)
+export async function removeChip({ port } = {}) {
+  const cdp = await attach(await livePort(port))
   try {
     return await cdp.evaluate(
       `(() => { const e = document.getElementById(${JSON.stringify(CHIP_ID)});
@@ -162,10 +187,13 @@ export async function removeChip({ port = 9222 } = {}) {
   }
 }
 
-/** True when a renderer target is reachable on `port`. */
-export async function cdpAvailable(port = 9222) {
+/**
+ * True when a renderer target is reachable - on `port` when given, otherwise on
+ * whatever port the running Orca actually opened.
+ */
+export async function cdpAvailable(port) {
   try {
-    await discoverTarget(port, { timeoutMs: 3000, attempts: 2 })
+    await discoverTarget(await livePort(port), { timeoutMs: 3000, attempts: 2 })
     return true
   } catch {
     return false

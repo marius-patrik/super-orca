@@ -18,14 +18,23 @@
  */
 
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { resolvePort } from './cdp-port.mjs'
+
+// On macOS, prefer the CLI inside the app bundle: Orca's installer leaves the
+// /usr/local/bin/orca shim root-owned 0700 after some updates, and the shim
+// readlinks itself, so PATH resolution intermittently dies with "Unable to
+// determine Orca.app path from symlink".
 const CLI = process.platform === 'win32'
   ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'),
          'Programs', 'orca', 'resources', 'bin', 'orca.exe')
-  : 'orca'
+  : process.platform === 'darwin' && existsSync('/Applications/Orca.app/Contents/Resources/bin/orca')
+    ? '/Applications/Orca.app/Contents/Resources/bin/orca'
+    : 'orca'
 
 /** Runs an orca CLI command and parses its --json envelope. */
 export function orca(args, { timeoutMs = 30000 } = {}) {
@@ -48,11 +57,20 @@ export function orca(args, { timeoutMs = 30000 } = {}) {
 }
 
 /** Reads the runtime descriptor: pid, transports and the auth token. */
+export function userDataDir() {
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'orca')
+  }
+  // Electron's userData on macOS is ~/Library/Application Support/<name>, not
+  // the XDG path - getting this wrong made every runtime read fail on the Mac.
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', 'orca')
+  }
+  return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'orca')
+}
+
 export async function runtimeDescriptor() {
-  const userData = process.platform === 'win32'
-    ? join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'orca')
-    : join(homedir(), '.config', 'orca')
-  return JSON.parse(await readFile(join(userData, 'orca-runtime.json'), 'utf-8'))
+  return JSON.parse(await readFile(join(userDataDir(), 'orca-runtime.json'), 'utf-8'))
 }
 
 /**
@@ -67,9 +85,11 @@ export async function runtimeDescriptor() {
  * This is a real security trade-off: an open CDP port lets ANY local process
  * drive the app. Opt in deliberately, not by default.
  */
-export async function cdpTargets(port = 9222) {
+export async function cdpTargets(port) {
+  const live = port ?? await resolvePort()
+  if (live == null) return null
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/list`)
+    const res = await fetch(`http://127.0.0.1:${live}/json/list`)
     if (!res.ok) return null
     return await res.json()
   } catch {

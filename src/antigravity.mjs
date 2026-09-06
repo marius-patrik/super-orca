@@ -74,15 +74,39 @@ Add-Type -TypeDefinition $sig
   })
 }
 
+/**
+ * Reads the token record macOS keeps on disk.
+ *
+ * The Windows keyring has no equivalent here: the Antigravity CLI writes
+ * `~/.gemini/antigravity-oauth-token` with the same
+ * `{ token: { access_token, refresh_token, expiry }, auth_method }` shape.
+ */
+async function readPosixTokenFile() {
+  const p = join(homedir(), '.gemini', 'antigravity-oauth-token')
+  try {
+    return JSON.parse(await readFile(p, 'utf-8'))
+  } catch (err) {
+    throw new Error(`antigravity token not readable at ${p}: ${err.message}`)
+  }
+}
+
+function readCredential() {
+  return process.platform === 'win32' ? readWindowsKeyring() : readPosixTokenFile()
+}
+
 /** Account identity and token freshness. Never returns the token itself. */
 export async function readAccount() {
-  if (process.platform !== 'win32') throw new Error('keyring reader is Windows-only')
-  const cred = await readWindowsKeyring()
+  const cred = await readCredential()
   const expiry = cred.token?.expiry ? new Date(cred.token.expiry) : null
+  const token = cred.token?.access_token ?? ''
   return {
     authMethod: cred.auth_method ?? null,
     tokenExpiresAt: expiry ? expiry.toISOString() : null,
-    tokenValid: expiry ? expiry.getTime() > Date.now() : false
+    tokenValid: expiry ? expiry.getTime() > Date.now() : false,
+    // A far-future expiry on a stub token reads as "valid" and hides the real
+    // problem, so call the placeholder out by name. The Mac carried exactly
+    // this: {"access_token":"test_acc","refresh_token":"test_ref"}.
+    placeholder: /^test_/.test(token)
   }
 }
 
@@ -103,7 +127,7 @@ async function defaultProject() {
  * account is not entitled, so a chip can render an honest state.
  */
 export async function readQuota() {
-  const cred = await readWindowsKeyring()
+  const cred = await readCredential()
   const token = cred.token?.access_token
   if (!token) return { available: false, reason: 'no access token in keyring' }
 
