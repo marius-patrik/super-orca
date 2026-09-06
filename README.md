@@ -299,20 +299,45 @@ status-bar chip, because Orca exposes no contribution point for one.
 
 ### Why Orca's own Gemini/Antigravity meters read 100%
 
-Orca resolves the quota project by calling `loadCodeAssist` with
-`metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' }` and reading
-`cloudaicompanionProject` from the response. **Consumer accounts get no such
-field**, so the lookup throws, the fetch never happens, and the meter renders a
-full bar instead of an error. A meter reading "100% left" there means "no data",
-not "no usage".
+Not because they failed. Read live off the running app, both chips carry
+`status: "ok"`, `error: null`, and a real bucket:
 
-Orca also hardcodes `weekly: null` and reduces all buckets with
-`max(usedPercent)`, so a provider with more than one pool can only ever show one
-number. `chipLabel()` renders every active bucket instead.
+```json
+{ "provider": "gemini",      "session": {"usedPercent": 0}, "weekly": null,
+  "buckets": [{"name": "Pro", "usedPercent": 0, "windowMinutes": 60}] }
+{ "provider": "antigravity", "session": {"usedPercent": 0}, "weekly": null,
+  "buckets": [{"name": "Pro", "usedPercent": 0, "windowMinutes": 60}] }
+```
 
-Because that meter cannot be right on a consumer plan, the `antigravity` item is
-worth turning off in Settings -> Status bar, leaving this chip as the only
-Antigravity number in the bar.
+Byte-identical, same `updatedAt`, because **there is no Antigravity reader**.
+The Antigravity result is the Gemini result with one field rewritten:
+
+```js
+e.status === 'ok' ? { ...e, provider: 'antigravity' } : { …unavailable… }
+```
+
+Orca's own error string says as much: *"Orca reads it from the shared Google
+Code Assist quota."* And Antigravity does not spend Code Assist quota - it has
+its own four pools (Gemini Models and Claude/GPT models, each weekly and
+five-hour) under a different client identity. So the 100% is honest and useless:
+it is the untouched gemini-cli pool, and it stays at 100% no matter how much
+Antigravity you burn.
+
+Two more walls behind that one:
+
+- **The shape cannot hold the answer.** Every return hardcodes `weekly: null`,
+  and `session` is `buckets.reduce(max usedPercent)`. Four pools collapse to one
+  number no matter what data arrives. `chipLabel()` renders every bucket instead.
+- **The API is shut to us.** With this account's token,
+  `v1internal:retrieveUserQuota` and `:retrieveUserQuotaSummary` both return
+  `403 PERMISSION_DENIED` - *"You do not have a valid license of this product
+  (#3501)"* - and `loadCodeAssist` returns `200` carrying only `allowedTiers`
+  and `ineligibleTiers`: no `cloudaicompanionProject`, no `currentTier`. Orca
+  gets a quota response at all only because it falls back to a project id cached
+  inside the credential string when that lookup comes up empty.
+
+So both items are worth turning off in Settings -> Status bar, leaving this chip
+as the only Antigravity number in the bar.
 
 ## Limits worth knowing
 
