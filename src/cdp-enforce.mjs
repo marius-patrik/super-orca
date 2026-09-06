@@ -46,15 +46,38 @@ function powershell(script, { timeoutMs = 30000 } = {}) {
   })
 }
 
+/**
+ * Where Windows keeps the shortcuts that launch Orca.
+ *
+ * Resolved in Node, not in PowerShell. The plugin worker does not inherit a
+ * full environment from Orca - APPDATA is absent - so a script expanding
+ * `$env:APPDATA` searches a root that does not exist, finds nothing, and
+ * reports one shortcut (the Desktop one) where there are four. `os.homedir()`
+ * does not depend on the environment.
+ */
+function shortcutRoots() {
+  const home = homedir()
+  // `||`, not `??`: the worker's APPDATA is present but empty, and an empty
+  // root makes the scan silently miss three of the four shortcuts.
+  const roaming = process.env.APPDATA || join(home, 'AppData', 'Roaming')
+  return [
+    join(roaming, 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    join(home, 'Desktop'),
+    join(roaming, 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar')
+  ]
+}
+
+/** The roots as a PowerShell array literal, single-quoted so nothing expands. */
+function rootsLiteral() {
+  const quoted = shortcutRoots().map((r) => `'${r.replace(/'/g, "''")}'`)
+  return `@(\n  ${quoted.join(',\n  ')}\n)`
+}
+
 /** PowerShell that walks Orca shortcuts and applies `mutate` to their args. */
 function shortcutScript(mutate) {
   return `
 $ErrorActionPreference = 'Stop'
-$roots = @(
-  "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs",
-  "$env:USERPROFILE\\Desktop",
-  "$env:APPDATA\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar"
-)
+$roots = ${rootsLiteral()}
 $sh = New-Object -ComObject WScript.Shell
 $changed = @()
 foreach ($root in $roots) {
@@ -198,11 +221,7 @@ export async function disable() {
 export async function status() {
   if (process.platform === 'darwin') return darwinStatus()
   const script = `
-$roots = @(
-  "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs",
-  "$env:USERPROFILE\\Desktop",
-  "$env:APPDATA\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar"
-)
+$roots = ${rootsLiteral()}
 $sh = New-Object -ComObject WScript.Shell
 $rows = @()
 foreach ($root in $roots) {
