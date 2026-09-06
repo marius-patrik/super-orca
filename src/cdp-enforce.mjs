@@ -169,8 +169,12 @@ async function darwinDisable() {
  * Returns the launcher paths actually modified.
  *
  * Neither platform restarts Orca: the flag is read at launch, so it takes
- * effect on the next one. On macOS that is
- * `launchctl kickstart -k gui/$UID/com.orca.serve`.
+ * effect on the next one. On macOS a rewritten plist needs a RELOAD, not a
+ * restart - `launchctl kickstart -k` re-runs the definition launchd already
+ * has loaded and will start the old argv again:
+ *
+ *   launchctl bootout gui/$(id -u)/com.orca.serve
+ *   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.orca.serve.plist
  */
 export async function enable(port = 9222) {
   if (process.platform === 'darwin') return darwinEnable(port)

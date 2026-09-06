@@ -163,18 +163,33 @@ Design tokens injected as CSS custom properties: `--background`, `--foreground`,
 
 Orca has **no status-bar contribution point**, so `src/status-chip.mjs` injects
 one over the Chrome DevTools Protocol. It needs Orca started with
-`--remote-debugging-port=9222`; without it, `antigravity-chip` (`Mod+Alt+G`)
+`--remote-debugging-port=<port>`; without it, `antigravity-chip` (`Mod+Alt+G`)
 is a no-op that says so.
 
-The chip is located structurally, not by class name - Orca's Tailwind classes
-churn between releases - and re-renders idempotently by element id.
+**The port is discovered, never assumed** (`src/cdp-port.mjs`). It is fixed at
+launch and it drifts: after a hard kill, 9222 stays bound by an orphaned
+crashpad handler until a reboot, so the next launch has to use another port.
+`resolvePort()` reads `--remote-debugging-port=N` off the running Orca process
+and probes it. Hardcoding 9222 cost a day of "the chip just isn't there": the
+live instance served on 9223, and `ensure()` kept rewriting the shortcuts back
+to 9222, so the launcher and the running app disagreed and nothing said a word.
+
+The chip is located by **geometry** - the innermost full-width, one-line-tall
+row flush with the bottom of the viewport - and re-renders idempotently by
+element id. It is deliberately not located by text: the previous version matched
+`/\d+\s+hosts?/`, but that pattern lives inside a template literal, where `\d`
+and `\s` lose their backslash before the renderer ever sees them. It arrived as
+`/d+s+hosts?/`, matched nothing, and returned the honest-looking
+`status bar not found`. Any regex injected through `Runtime.evaluate` must
+double its backslashes.
 
 ### Antigravity quota status
 
 `src/antigravity.mjs` reads Antigravity's credentials from the OS keyring
 (Windows generic credential `gemini:antigravity`, **not**
 `~/.gemini/oauth_creds.json`, which belongs to the Gemini CLI - a different
-OAuth client) and calls
+OAuth client; on macOS it falls back to `~/.gemini/antigravity-oauth-token`,
+which has the same shape) and calls
 `daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`.
 
 Request and response field names come from the protobuf descriptors embedded
@@ -230,13 +245,53 @@ AG G 30%/0% · C 66%/0%
 > **does** cost a model turn. Node's `execFile` does no such rewriting, so the
 > plugin path is unaffected.
 
+> **Testing over SSH on macOS:** the same command answers
+> `Eligibility check failed: UNAUTHENTICATED` even though the CLI is signed in.
+> A non-interactive SSH session cannot reach the login keychain, so agy falls
+> back to the on-disk token. Under the GUI login session - which is where the
+> plugin worker runs - it reads the keychain and works. Do not conclude the Mac
+> is signed out from an SSH test.
+
+`agy` is resolved by absolute path (`~/.local/bin`, `/opt/homebrew/bin`,
+`/usr/local/bin`, or the WinGet shim on Windows). A bare `agy` is not safe: the
+worker inherits Orca's environment, and a macOS GUI launch carries launchd's
+bare `PATH` - no Homebrew, no `~/.local/bin` - so exec would fail with `ENOENT`
+on a machine where agy is plainly installed.
+
 ### Keeping the CDP port open
 
 A plugin cannot add a flag to the process that launched it, but it can make the
-flag survive. `src/cdp-enforce.mjs` appends `--remote-debugging-port=9222` to
-every shortcut that launches Orca (Start Menu, Desktop, taskbar), reconciled on
-every activation so a reinstall cannot silently drop it. `disable()` reverts all
-of them.
+flag survive. `src/cdp-enforce.mjs` writes it into whatever actually launches
+Orca on this machine, reconciled on every activation so a reinstall cannot
+silently drop it. `disable()` reverts everything.
+
+**Windows** - every shortcut that launches `Orca.exe` (Start Menu, Desktop,
+taskbar), including the Startup `Orca Server` shortcut, which is what starts the
+serve instance at logon.
+
+**macOS** - the `com.orca.serve` LaunchAgent. The agent normally runs the `orca`
+CLI, and the CLI builds its child argv from known flags only
+(`out/cli/runtime/launch.js`, `serveOrcaApp`) - it forwards nothing else - so
+enforcement rewrites the agent to run the app binary directly with the same
+`--serve*` switches:
+
+```
+/Applications/Orca.app/Contents/MacOS/Orca --serve --serve-port 6768   --serve-pairing-address <ip> --remote-debugging-port=9222
+```
+
+launchd's `KeepAlive` then owns restarts in place of the CLI's foreground serve
+supervisor. **A rewritten plist needs a reload, not a restart** - `launchctl
+kickstart -k` re-runs the *loaded* definition and will happily start the old
+argv again:
+
+```
+launchctl bootout gui/$(id -u)/com.orca.serve
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.orca.serve.plist
+```
+
+`ensure()` never rewrites a port a launcher already names - only the live
+instance knows which port it actually got, and the chip discovers that at
+runtime.
 
 This is a deliberate, persistent weakening: an open CDP port lets any local
 process drive Orca's renderer with full privileges. It is the price of a
@@ -254,6 +309,10 @@ not "no usage".
 Orca also hardcodes `weekly: null` and reduces all buckets with
 `max(usedPercent)`, so a provider with more than one pool can only ever show one
 number. `chipLabel()` renders every active bucket instead.
+
+Because that meter cannot be right on a consumer plan, the `antigravity` item is
+worth turning off in Settings -> Status bar, leaving this chip as the only
+Antigravity number in the bar.
 
 ## Limits worth knowing
 
